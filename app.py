@@ -4,55 +4,55 @@ import cv2
 import numpy as np
 import streamlit as st
 
-# 安定したCDNサーバーから設定ファイルを取得
-CASCADE_URL = "https://cdn.jsdelivr.net/gh/opencv/opencv@4.x/data/haarcascades/haarcascade_frontalface_default.xml"
 CASCADE_PATH = "haarcascade_frontalface_default.xml"
+CASCADE_URL = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
 
-def get_cascade():
-    # ファイルが存在しない、または破損している(XMLでない)場合は再取得
+def ensure_cascade_file():
+    """設定ファイルを安全に用意する関数"""
     if not os.path.exists(CASCADE_PATH) or os.path.getsize(CASCADE_PATH) < 10000:
         try:
             req = urllib.request.Request(CASCADE_URL, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req) as response:
-                content = response.read()
-                if b"<?xml" in content:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = resp.read()
+                if len(data) > 10000:
                     with open(CASCADE_PATH, 'wb') as f:
-                        f.write(content)
+                        f.write(data)
         except Exception:
             pass
 
-    cascade = cv2.CascadeClassifier()
-    if os.path.exists(CASCADE_PATH):
-        cascade.load(CASCADE_PATH)
-    return cascade
-
-def crop_and_blend_faces(img1, img2):
-    cascade = get_cascade()
+def extract_face_or_center(img):
+    """顔を切り抜く関数（エラー時は中央部を切り抜き）"""
+    h, w = img.shape[:2]
     
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
-    
-    faces1 = cascade.detectMultiScale(gray1, 1.1, 5, minSize=(100, 100)) if not cascade.empty() else []
-    faces2 = cascade.detectMultiScale(gray2, 1.1, 5, minSize=(100, 100)) if not cascade.empty() else []
-    
-    # 顔が検出された場合は顔を中心に、未検出の場合は写真の中央60%をカット
-    def get_face_or_center(img, faces):
-        h, w = img.shape[:2]
-        if len(faces) > 0:
-            x, y, fw, fh = max(faces, key=lambda b: b[2] * b[3])
-            return img[y:y+fh, x:x+fw]
-        else:
-            cy, cx = h // 2, w // 2
-            size = int(min(h, w) * 0.6 // 2)
-            return img[max(0, cy-size):min(h, cy+size), max(0, cx-size):min(w, cx+size)]
-
-    face1 = cv2.resize(get_face_or_center(img1, faces1), (500, 500))
-    face2 = cv2.resize(get_face_or_center(img2, faces2), (500, 500))
-    
-    if len(faces1) == 0 or len(faces2) == 0:
-        st.info("※一部の画像で顔の位置を自動特定できなかったため、中心部を基準に切り抜いて合成しました。")
+    try:
+        ensure_cascade_file()
+        if os.path.exists(CASCADE_PATH):
+            cascade = cv2.CascadeClassifier(CASCADE_PATH)
+            if not cascade.empty():
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(80, 80))
+                if len(faces) > 0:
+                    x, y, fw, fh = max(faces, key=lambda b: b[2] * b[3])
+                    return img[y:y+fh, x:x+fw], True
+    except Exception:
+        pass
         
-    return cv2.addWeighted(face1, 0.5, face2, 0.5, 0)
+    # 顔認識失敗・エラー時は安全に中央をトリミング
+    cy, cx = h // 2, w // 2
+    size = int(min(h, w) * 0.6 // 2)
+    return img[max(0, cy-size):min(h, cy+size), max(0, cx-size):min(w, cx+size)], False
+
+def blend_faces(img1, img2):
+    face1, ok1 = extract_face_or_center(img1)
+    face2, ok2 = extract_face_or_center(img2)
+    
+    if not (ok1 and ok2):
+        st.info("※顔の位置を自動特定できなかったため、写真の中心部を基準に切り抜いて合成しました。")
+        
+    face1_resized = cv2.resize(face1, (500, 500))
+    face2_resized = cv2.resize(face2, (500, 500))
+    
+    return cv2.addWeighted(face1_resized, 0.5, face2_resized, 0.5, 0)
 
 st.title("平均顔生成システム")
 
@@ -67,5 +67,5 @@ if file1 and file2:
     img2 = cv2.imdecode(np.frombuffer(file2.read(), np.uint8), cv2.IMREAD_COLOR)
 
     if st.button("平均顔を生成する"):
-        result = crop_and_blend_faces(img1, img2)
+        result = blend_faces(img1, img2)
         st.image(cv2.cvtColor(result, cv2.COLOR_BGR2RGB), caption="生成された平均顔", use_container_width=True)
