@@ -1,32 +1,35 @@
+import os
+import urllib.request
 import cv2
 import numpy as np
 import streamlit as st
 
-# OpenCV標準の顔検出AI
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+# 顔検出用の設定ファイルを自動で準備
+CASCADE_URL = "https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml"
+CASCADE_PATH = "haarcascade_frontalface_default.xml"
+
+if not os.path.exists(CASCADE_PATH):
+    urllib.request.urlretrieve(CASCADE_URL, CASCADE_PATH)
+
+face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
 
 def crop_and_blend_faces(img1, img2):
     gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
     gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
     
-    # 顔の位置を自動検出
     faces1 = face_cascade.detectMultiScale(gray1, 1.1, 5, minSize=(100, 100))
     faces2 = face_cascade.detectMultiScale(gray2, 1.1, 5, minSize=(100, 100))
     
-    # 顔が検出できない場合のフォールバック
     if len(faces1) == 0 or len(faces2) == 0:
         st.warning("顔を上手く検出できませんでした。正面を向いた明らかな写真でお試しください。")
         return cv2.addWeighted(cv2.resize(img1, (500, 500)), 0.5, cv2.resize(img2, (500, 500)), 0.5, 0)
     
-    # 最も大きく映っている顔をそれぞれ抽出
     x1, y1, w1, h1 = max(faces1, key=lambda b: b[2] * b[3])
     x2, y2, w2, h2 = max(faces2, key=lambda b: b[2] * b[3])
     
-    # 顔のパーツ位置を合わせるため、顔の周りを切り出して同じサイズ(500x500)に統一
     face1 = cv2.resize(img1[y1:y1+h1, x1:x1+w1], (500, 500))
     face2 = cv2.resize(img2[y2:y2+h2, x2:x2+w2], (500, 500))
     
-    # 位置が揃った顔同士を合成
     blended = cv2.addWeighted(face1, 0.5, face2, 0.5, 0)
     return blended
 
